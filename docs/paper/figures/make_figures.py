@@ -80,8 +80,8 @@ def save(fig, name: str) -> None:
 # Figure 1 — Architecture.
 
 def fig_architecture():
-    fig, ax = plt.subplots(figsize=(6.5, 3.0))
-    ax.set_xlim(0, 100); ax.set_ylim(0, 50); ax.axis("off")
+    fig, ax = plt.subplots(figsize=(7.5, 3.2))
+    ax.set_xlim(0, 130); ax.set_ylim(0, 52); ax.axis("off")
 
     def box(x, y, w, h, label, facecolor, edgecolor="black", text_color="black",
             fontsize=9, rounded=0.02):
@@ -96,28 +96,28 @@ def fig_architecture():
                 fontsize=fontsize, color=text_color)
 
     # LLM
-    box(2, 18, 16, 14, "LLM\n(MCP host)", C["llm"], fontsize=10)
+    box(2, 18, 18, 14, "LLM\n(MCP host)", C["llm"], fontsize=10)
 
-    # Bridge outer
-    box(28, 4, 42, 42, "", "#ffffff", edgecolor=C["bridge_outer"], rounded=1.5)
-    ax.text(28 + 21, 41, "Bridge (sole trust boundary)",
-            ha="center", va="bottom", fontsize=9, color=C["bridge_outer"],
+    # Bridge outer — widened to comfortably hold 2x2 inner grid
+    box(32, 4, 60, 44, "", "#ffffff", edgecolor=C["bridge_outer"], rounded=1.5)
+    ax.text(32 + 30, 42, "Bridge — sole trust boundary",
+            ha="center", va="bottom", fontsize=9.5, color=C["bridge_outer"],
             fontweight="bold")
 
-    # Bridge inner components (2 x 2 grid)
-    inner_w, inner_h = 18, 9
+    # Bridge inner components (2 x 2 grid) — single-line labels, wider cells
+    inner_w, inner_h = 26, 11
     cells = [
-        (31, 25, "Capability\ntoken verify"),
-        (51, 25, "Range / type\nchecks"),
-        (31, 10, "Dry-run\nevaluator"),
-        (51, 10, "Audit /\nrate-limit"),
+        (35, 24, "Capability token"),
+        (63, 24, "Range / type"),
+        (35, 10, "Dry-run"),
+        (63, 10, "Audit / rate-limit"),
     ]
     for x, y, label in cells:
         box(x, y, inner_w, inner_h, label, C["bridge_inner"],
-            edgecolor=C["bridge_outer"], fontsize=8)
+            edgecolor=C["bridge_outer"], fontsize=8.5)
 
     # Device
-    box(80, 18, 18, 14, "Device\n(<16 KB MCU)", C["device"], fontsize=10)
+    box(104, 18, 24, 14, "Device\n(<16 KB MCU)", C["device"], fontsize=10)
 
     # Arrows.
     def arrow(x1, y1, x2, y2, label, dy_label=2, color="black"):
@@ -127,10 +127,10 @@ def fig_architecture():
         ax.text((x1 + x2) / 2, max(y1, y2) + dy_label, label,
                 ha="center", va="bottom", fontsize=8, color=color, style="italic")
 
-    arrow(18, 27, 28, 27, "MCP", dy_label=1)
-    arrow(28, 23, 18, 23, "results", dy_label=-3.5, color="#666666")
-    arrow(70, 27, 80, 27, "DCP wire", dy_label=1)
-    arrow(80, 23, 70, 23, "reply", dy_label=-3.5, color="#666666")
+    arrow(20, 28, 32, 28, "MCP",       dy_label=1)
+    arrow(32, 22, 20, 22, "results",   dy_label=-3.5, color="#666666")
+    arrow(92, 28, 104, 28, "DCP wire", dy_label=1)
+    arrow(104, 22, 92, 22, "reply",    dy_label=-3.5, color="#666666")
 
     # Transport bullets under device
     transports = "UART  ·  MQTT  ·  BLE  ·  USB-CDC"
