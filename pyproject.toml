@@ -1,7 +1,7 @@
 [project]
-name = "dcp"
+name = "dcp-protocol"
 version = "0.3.0"
-description = "Device Context Protocol — bridge between LLM agents and physical devices"
+description = "Device Context Protocol — bridge between LLM agents and physical devices. Import as `dcp`."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
