@@ -1,0 +1,54 @@
+dcp: 0.3
+device:
+  id:     door-lock-frontdoor-01
+  model:  servo_actuated_lock
+  vendor: example.dev
+
+# Recipe: a smart door lock — the "capability + dry_run as real safety" demo.
+# Teaches:
+#   - capability scoping that GENUINELY MATTERS (the LLM should not be
+#     able to unlock your door just because it can also read the
+#     temperature). We use `lock.admin`, NOT `lock.write`, so the
+#     capability name itself signals "this is dangerous."
+#   - dry_run as a safety mechanism for irreversible actions: the LLM
+#     can preview "if I issue this unlock, the device state would go
+#     from locked -> unlocked" without actually unlatching.
+#   - non-idempotent admin actions explicitly declared
+#   - state-change events so anyone watching can see who/when
+#
+# Hardware (when wiring a real lock):
+#   - Hobby servo (SG90) on GPIO 13, signal only (servo VCC -> external 5V!)
+#   - For solenoid locks: replace the servo helper with relay control
+#
+# Pair with:
+#   dcp serve examples/door_lock_manifest.yaml --serial COM3 \
+#       --grant lock.read   # default: only read access
+#
+# Then mint a scoped admin token explicitly when you (the LLM operator)
+# want to allow unlock for a specific session:
+#   dcp token mint --caps lock.read,lock.admin --ttl 300
+
+intents:
+  - name: unlock
+    capability: lock.admin       # NOT lock.write — name signals danger
+    idempotent: false            # one physical unlock per call
+    dry_run:    true             # LLM can preview without unlatching
+
+  - name: lock
+    capability: lock.admin
+    idempotent: true             # locking already-locked door is a no-op
+    dry_run:    true
+
+  - name: read_state
+    # "locked" or "unlocked"
+    returns: { type: string }
+    capability: lock.read
+
+events:
+  - name: state_changed
+    # Emitted whenever the lock physically changes state, regardless of
+    # whether the change came from an intent call or a manual override.
+    payload:
+      from: { type: string }     # "locked" / "unlocked"
+      to:   { type: string }
+    capability: lock.read

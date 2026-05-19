@@ -1,0 +1,42 @@
+dcp: 0.3
+device:
+  id:     stepper-curtain-01
+  model:  28byj48_uln2003
+  vendor: example.dev
+
+# Recipe: a 28BYJ-48 stepper motor driven by a ULN2003 board.
+# Teaches:
+#   - non-idempotent intents (every step() call advances state)
+#   - dry_run as ACTUALLY VALUABLE — the LLM can preview the new motor
+#     position before committing the move ("would_move_to: step 2700")
+#   - integer + duration param mix
+#   - device-tracked state (position) exposed via a read intent
+#
+# Hardware: 28BYJ-48 stepper, ULN2003 driver board, IN1..IN4 -> 4 GPIOs.
+# 4096 native steps per revolution (with internal 64:1 gearbox).
+# Pair with:
+#   dcp serve examples/stepper_manifest.yaml --serial COM3
+
+intents:
+  - name: step
+    # Move the motor by `count` steps in the given `direction`.
+    # +1 = forward, -1 = reverse. The Bridge enforces both ranges.
+    params:
+      direction: { type: int, range: [-1, 1] }
+      count:     { type: int, range: [1, 4096], default: 512 }
+      speed_rpm: { type: int, range: [1, 15],   default: 8 }
+    capability: motor.write
+    idempotent: false           # cumulative — calling twice doubles the move
+    dry_run:    true
+
+  - name: read_position
+    # Current absolute step count (signed, can be negative after reverse).
+    returns: { type: int }
+    capability: motor.read
+
+  - name: home
+    # Move back to position 0. Non-idempotent because if you call it
+    # twice quickly the motor might already be moving from the first call.
+    capability: motor.write
+    idempotent: false
+    dry_run:    true

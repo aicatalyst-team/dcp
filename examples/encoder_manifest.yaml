@@ -1,0 +1,40 @@
+dcp: 0.3
+device:
+  id:     encoder-volume-01
+  model:  ky040_rotary_encoder
+  vendor: example.dev
+
+# Recipe: a KY-040 rotary encoder with integrated push-button.
+# Teaches:
+#   - the "event-only device" pattern — the device has NO intents
+#     callable from the LLM side. It is a pure event source.
+#     The LLM gets notifications about turns and clicks; it does not
+#     command the encoder to do anything.
+#   - structured event payloads with multiple fields + units
+#
+# Hardware: KY-040 module — CLK + DT to two GPIOs with pullups,
+# SW (button) to a third GPIO with pullup.
+# Pair with:
+#   dcp serve examples/encoder_manifest.yaml --serial COM3
+
+# Empty intents list — this device only PUSHES, never RECEIVES.
+intents: []
+
+events:
+  - name: encoder_turned
+    payload:
+      # +1 = clockwise one detent, -1 = counterclockwise.
+      delta:    { type: int, range: [-10, 10] }
+      # Absolute position since power-on. Wraps at int32 limits.
+      position: { type: int }
+    capability: input.read
+
+  - name: button_pressed
+    # Fires once on press down (not on hold or release).
+    capability: input.read
+
+  - name: button_long_press
+    # Fires once when held > 1 second.
+    payload:
+      held_ms: { type: duration, unit: ms }
+    capability: input.read

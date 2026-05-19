@@ -23,6 +23,7 @@
 - [Architecture](#architecture)
 - [Quickstart](#quickstart)
 - [Add a feature in 5 steps](docs/ADDING_FEATURES.md)
+- [Recipes — five ready-to-flash device skeletons](docs/RECIPES.md)
 - [Wire format](#wire-format) · full [SPEC.md](SPEC.md)
 - [Manifest](#manifest)
 - [Roadmap](#roadmap)

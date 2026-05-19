@@ -1,0 +1,43 @@
+dcp: 0.3
+device:
+  id:     sensor-living-room-01
+  model:  dht22_temp_humidity
+  vendor: example.dev
+
+# Recipe: a DHT22 temperature + humidity sensor.
+# Teaches:
+#   - read intents that return typed scalar values with explicit units
+#     (`celsius`, `percent`) — the LLM sees these in the tool schema
+#     and stops asking "Fahrenheit?"
+#   - an unsolicited event stream — the device pushes notifications
+#     when temperature crosses a configured threshold, no polling
+#   - a "configure" intent that mutates device state used by events
+#
+# Hardware: DHT22 (AM2302), data pin to DHT_PIN below, 4.7 KOhm pullup
+# to VCC. Pair with:
+#   dcp serve examples/sensor_dht22_manifest.yaml --serial COM3
+
+intents:
+  - name: read_temperature
+    returns: { type: float, unit: celsius }
+    capability: env.read
+
+  - name: read_humidity
+    returns: { type: float, unit: percent, range: [0, 100] }
+    capability: env.read
+
+  - name: set_alert_threshold
+    # Reconfigure the temperature above which the device emits a
+    # threshold_exceeded event. Persists until next reboot.
+    params:
+      temperature: { type: float, unit: celsius, range: [-40, 80], default: 30.0 }
+    capability: env.write
+    idempotent: true
+    dry_run:    true
+
+events:
+  - name: threshold_exceeded
+    payload:
+      temperature: { type: float, unit: celsius }
+      threshold:   { type: float, unit: celsius }
+    capability: env.read
