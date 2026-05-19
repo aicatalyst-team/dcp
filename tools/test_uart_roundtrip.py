@@ -9,6 +9,8 @@ Exercises every code path in the bridge x firmware boundary:
 - dry-run (predicted, no side effect)
 - out-of-range (Bridge-rejected)
 - unknown intent (device-rejected with error frame)
+- non-idempotent intent with duration param (blink) — exercises
+  the firmware-side CBOR float decode path
 """
 from __future__ import annotations
 
@@ -60,6 +62,9 @@ async def main(port: str) -> int:
         ("dry-run set_color cyan",      "set_color",      {"r": 0, "g": 255, "b": 255}, True,  "ok"),
         ("set_color out-of-range",      "set_color",      {"r": 999, "g": 0, "b": 0},   False, "range"),
         ("turn_into_pumpkin (unknown)", "turn_into_pumpkin", None,                    False, "unknown_intent"),
+        ("dry-run blink(5, 150)",       "blink",          {"times": 5, "period": 150},  True,  "ok"),
+        ("blink(3, 150) real",          "blink",          {"times": 3, "period": 150},  False, "ok"),
+        ("blink(999, 100) bad times",   "blink",          {"times": 999, "period": 100}, False, "range"),
     ]
 
     passed = failed = 0

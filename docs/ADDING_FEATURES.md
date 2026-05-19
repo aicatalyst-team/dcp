@@ -22,9 +22,9 @@ Edit `examples/lamp_manifest.yaml`. Append to `intents:`:
 ```yaml
 - name: blink
   params:
-    times:  { type: int,      range: [1, 100],   default: 3 }
+    times:  { type: int,      range: [1, 20],     default: 3 }
     period: { type: duration, unit: ms,
-              range: [50, 5000], default: 200 }
+              range: [50, 2000], default: 200 }
   capability: lamp.write
   idempotent: false       # calling twice blinks twice
   dry_run:    true        # the LLM can ask "what would this do?"
@@ -73,8 +73,8 @@ static dcp::Status handle_blink(uint8_t kind,
     // Belt-and-suspenders: re-check ranges. The Bridge already did this,
     // but defending here means a misbehaving Bridge can't drive the LED
     // outside the safe envelope.
-    if (times < 1   || times  > 100)  return dcp::STATUS_RANGE;
-    if (period < 50 || period > 5000) return dcp::STATUS_RANGE;
+    if (times < 1   || times  > 20)   return dcp::STATUS_RANGE;
+    if (period < 50 || period > 2000) return dcp::STATUS_RANGE;
 
     // Dry-run: report what we would do, no side effects.
     if (kind == dcp::KIND_DRY_RUN) {
@@ -233,11 +233,38 @@ The Bridge fans this out to any LLM session subscribed to `lamp.read`.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `denied` with empty data from device | error reply buffer too small in firmware | bump the `uint8_t buf[N]` in your handler |
+| `denied` after Bridge says `ok` for the same call shape on dry-run | **CBOR type mismatch** — handler used `read_int` on a `duration`/`float` param; the reader wedges, next `next_key` returns false | use `read_float` for any param whose manifest type is `float` or `duration`; `read_int` only for `int`. See "CBOR is type-strict" note below |
 | `unknown_intent` for an intent you swore is in the manifest | spelling mismatch — `DCP_ID("foo")` vs manifest `name: Foo` | strings are byte-exact; rename one to match |
 | LLM keeps sending out-of-range values | you forgot `range:` in the manifest | add it; the Bridge picks it up after restart |
 | Long handler causes `busy` from the Bridge | `delay()` exceeded the Bridge timeout (default 2s) | shorten, or run async via FreeRTOS task and ack-then-event |
 | `set_color` works but no light changes | you don't have an RGB LED wired up | that's by design — the example saves state and flashes the brightness LED to acknowledge |
 | Capability check fails with `capability_required` | the LLM session's token doesn't include that capability | re-issue a token: `dcp token mint --caps lamp.write,lamp.read,...` |
+
+### CBOR is type-strict (the duration-as-float trap)
+
+CBOR distinguishes integer and float at the major-type level. A `42`
+and a `42.0` are **not** the same item. The Bridge encodes manifest
+parameter values like this:
+
+| manifest `type` | wire encoding |
+|---|---|
+| `int`, `bool` | CBOR int |
+| `string` | CBOR text string |
+| `float`, **`duration`** | **CBOR float (double)** |
+
+So a `duration` param like `period: { type: duration, unit: ms }`
+arrives on the device as a CBOR float, even if the caller wrote `200`
+(no decimal). Your firmware handler **must** decode it with
+`params.read_float(&period)`, not `params.read_int(&period)`. A
+mismatched read returns false and leaves the parser positioned wrong
+for the next field — the next `next_key()` call will then also fail,
+and the handler returns `STATUS_DENIED`.
+
+If you see "Bridge accepts the call (status is not `range` or
+`unknown_intent`) but the device returns `denied` for both dry-run
+and real calls, while a sibling intent with only `int`/`bool` params
+works fine," check this first. The fix is one word per affected
+param (`read_int` → `read_float`).
 
 ---
 

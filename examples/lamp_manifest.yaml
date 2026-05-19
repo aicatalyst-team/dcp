@@ -26,6 +26,14 @@ intents:
     returns: { type: float, unit: percent }
     capability: lamp.read
 
+  - name: blink
+    params:
+      times:  { type: int,      range: [1, 20],     default: 3 }
+      period: { type: duration, unit: ms, range: [50, 2000], default: 200 }
+    capability: lamp.write
+    idempotent: false     # blink(3) twice = 6 blinks, not 3
+    dry_run: true
+
 events:
   - name: motion_detected
     payload:

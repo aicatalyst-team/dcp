@@ -92,12 +92,51 @@ static dcp::Status handle_set_color(uint8_t kind,
     return dcp::STATUS_OK;
 }
 
+// Blink the built-in LED `times` times, each cycle = `period`ms on + `period`ms off.
+// Note: blocking implementation — the main loop can't service DCP frames during
+// the blink. Manifest range caps total time at 20 * 2000 * 2 = 80s worst case;
+// a real product would use a millis()-based state machine instead.
+static dcp::Status handle_blink(uint8_t kind,
+                                dcp::CborReader& params,
+                                dcp::CborMap& reply,
+                                void* /*user*/) {
+    int64_t times = 3;
+    double  period_ms = 200.0;     // duration is encoded as CBOR float on the wire
+    while (params.remaining() > 0) {
+        const char* key = nullptr;
+        size_t key_len = 0;
+        if (!params.next_key(&key, &key_len)) return dcp::STATUS_DENIED;
+        if      (key_len == 5 && memcmp(key, "times",  5) == 0) { if (!params.read_int(&times))       return dcp::STATUS_RANGE; }
+        else if (key_len == 6 && memcmp(key, "period", 6) == 0) { if (!params.read_float(&period_ms)) return dcp::STATUS_RANGE; }
+        else                                                    { params.skip(); }
+    }
+    if (times < 1 || times > 20)              return dcp::STATUS_RANGE;
+    if (period_ms < 50.0 || period_ms > 2000.0) return dcp::STATUS_RANGE;
+
+    uint32_t period = (uint32_t)period_ms;
+    if (kind == dcp::KIND_DRY_RUN) {
+        reply.add_int("would_blink_times",  times);
+        reply.add_int("would_blink_period", (int64_t)period);
+        return dcp::STATUS_OK;
+    }
+
+    // Save current brightness so we can restore it after the blink.
+    uint32_t saved = (uint32_t)(g_brightness * 2.55f);
+    for (int64_t i = 0; i < times; ++i) {
+        ledcWrite(LED_PIN, 255);        delay(period);
+        ledcWrite(LED_PIN, 0);          delay(period);
+    }
+    ledcWrite(LED_PIN, saved);
+    return dcp::STATUS_OK;
+}
+
 // Intent IDs are resolved at compile time via DCP_ID().
 // Keep these strings in sync with examples/lamp_manifest.yaml.
 static dcp::IntentBinding bindings[] = {
     { DCP_ID("set_brightness"),  handle_set_brightness,  nullptr },
     { DCP_ID("set_color"),       handle_set_color,       nullptr },
     { DCP_ID("read_brightness"), handle_read_brightness, nullptr },
+    { DCP_ID("blink"),           handle_blink,           nullptr },
 };
 
 static dcp::DCP* dcp_instance = nullptr;

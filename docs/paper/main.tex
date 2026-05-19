@@ -462,9 +462,11 @@ implementation itself; ports to MCUs without an Arduino-style runtime are
 expected to shed the bulk of the residual baseline.
 
 The Bridge $\leftrightarrow$ device path was end-to-end validated against
-ten round-trip cases (\texttt{tools/test\_uart\_roundtrip.py}) covering
-calls, reads, dry-run, range rejection, and unknown-intent error frames.
-All ten cases pass against real hardware.
+thirteen round-trip cases (\texttt{tools/test\_uart\_roundtrip.py}) covering
+calls, reads, dry-run, range rejection, unknown-intent error frames, and a
+non-idempotent intent with a \texttt{duration} parameter that exercises
+the firmware-side CBOR float decode path. All thirteen cases pass against
+real hardware.
 
 \subsection{Conformance suite}
 

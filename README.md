@@ -75,7 +75,7 @@ device boundary.
 As of v0.3 the reference firmware is **measured-validated on an
 ESP32-WROOM-32 dev board** over CH340 USB-Serial at 115 200 baud:
 
-- 10/10 round-trip tests pass (`tools/test_uart_roundtrip.py`)
+- 13/13 round-trip tests pass (`tools/test_uart_roundtrip.py`)
 - 88/88 Python unit & conformance tests pass
 - Compiled firmware: 294 KB flash, 22.7 KB globals (Arduino-ESP32 core 3.3.8)
 - The pure DCP layer is approximately 14 KB over a baseline empty
@@ -264,7 +264,7 @@ MIT.
 - [x] Conformance test suite (golden frames, language-neutral YAML)
 - [x] Codegen `--stubs`: emits handler signatures + binding table
 - [x] Quickstart video script ([docs/QUICKSTART_VIDEO.md](docs/QUICKSTART_VIDEO.md))
-- [x] Real-hardware UART validation (ESP32-WROOM-32, 10/10 round-trips)
+- [x] Real-hardware UART validation (ESP32-WROOM-32, 13/13 round-trips)
 - [x] Public repo at `device-context-protocol/dcp` (v0.3.0 released)
 - [x] PyPI release (`pip install pydcp`)
 - [ ] T-Panel S3 + CAN bus demo (firmware ready, awaiting hardware)
