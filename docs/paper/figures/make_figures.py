@@ -148,43 +148,57 @@ def fig_architecture():
 # Figure 2 — Wire format and comparison to MCP JSON-RPC.
 
 def fig_wire_format():
-    fig = plt.figure(figsize=(6.5, 3.2))
-    gs = fig.add_gridspec(2, 1, height_ratios=[1.2, 1], hspace=0.55)
+    fig = plt.figure(figsize=(7.5, 3.6))
+    gs = fig.add_gridspec(2, 1, height_ratios=[1.3, 1], hspace=0.65)
 
     # Top: byte-level layout of a DCP frame.
+    # Three big sections (header / payload / HMAC). The header breakdown
+    # (ver/kind/seq/iid) is too narrow to label per-field at honest scale,
+    # so we only call out the three macro regions and put the per-field
+    # detail in a small inset box on the right.
     ax1 = fig.add_subplot(gs[0])
-    ax1.set_xlim(0, 35); ax1.set_ylim(-0.4, 1.6); ax1.axis("off")
+    ax1.set_xlim(-0.5, 35.5); ax1.set_ylim(-1.4, 1.9); ax1.axis("off")
 
-    segments = [
-        (0,  1, "ver",   C["header"]),
-        (1,  1, "kind",  C["header"]),
-        (2,  2, "seq",   C["header"]),
-        (4,  2, "iid",   C["header"]),
-        (6, 13, "CBOR payload (variable)", C["cbor"]),
-        (19, 16, "optional HMAC-SHA256[:16]", C["hmac"]),
-    ]
-    for x, w, label, color in segments:
-        ax1.add_patch(mpatches.Rectangle((x, 0), w, 1,
-                                           facecolor=color,
-                                           edgecolor="white",
-                                           linewidth=1.0,
-                                           alpha=0.9))
-        ax1.text(x + w / 2, 0.5, label,
-                 ha="center", va="center",
-                 fontsize=8, color="white", fontweight="bold")
-        if w == 1 or w == 2:
-            ax1.text(x + w / 2, -0.15, f"{w} B",
-                     ha="center", va="top", fontsize=7, color="#444")
+    # Per-field sub-shading inside the header block, but no per-field labels.
+    sub_colors = [C["header"], "#2d6aa3", C["header"], "#2d6aa3"]
+    sub_widths = [1, 1, 2, 2]
+    sx = 0
+    for w, c in zip(sub_widths, sub_colors):
+        ax1.add_patch(mpatches.Rectangle((sx, 0), w, 1,
+                                           facecolor=c, edgecolor="white",
+                                           linewidth=1.0, alpha=0.95))
+        sx += w
 
-    ax1.annotate("6-byte fixed header", xy=(3, 1.0), xytext=(3, 1.45),
-                 fontsize=8, color="#333", ha="center",
-                 arrowprops=dict(arrowstyle="-", linewidth=0.5, color="#777"))
-    ax1.annotate("CBOR map (RFC 8949)", xy=(12.5, 1.0), xytext=(12.5, 1.45),
-                 fontsize=8, color="#333", ha="center",
-                 arrowprops=dict(arrowstyle="-", linewidth=0.5, color="#777"))
-    ax1.annotate("opt. integrity", xy=(27, 1.0), xytext=(27, 1.45),
-                 fontsize=8, color="#333", ha="center",
-                 arrowprops=dict(arrowstyle="-", linewidth=0.5, color="#777"))
+    # The two big regions.
+    ax1.add_patch(mpatches.Rectangle((6, 0), 13, 1,
+                                       facecolor=C["cbor"], edgecolor="white",
+                                       linewidth=1.0, alpha=0.92))
+    ax1.text(12.5, 0.5, "CBOR payload (variable)",
+             ha="center", va="center", fontsize=9, color="white",
+             fontweight="bold")
+    ax1.add_patch(mpatches.Rectangle((19, 0), 16, 1,
+                                       facecolor=C["hmac"], edgecolor="white",
+                                       linewidth=1.0, alpha=0.92))
+    ax1.text(27, 0.5, "optional HMAC-SHA256[:16]",
+             ha="center", va="center", fontsize=9, color="white",
+             fontweight="bold")
+
+    # Three top bracket labels with leader lines, comfortably spaced.
+    ax1.annotate("6-byte fixed header", xy=(3, 1.0), xytext=(3, 1.65),
+                 fontsize=8.5, color="#222", ha="center",
+                 arrowprops=dict(arrowstyle="-", linewidth=0.5, color="#888"))
+    ax1.annotate("CBOR map (RFC 8949)", xy=(12.5, 1.0), xytext=(12.5, 1.65),
+                 fontsize=8.5, color="#222", ha="center",
+                 arrowprops=dict(arrowstyle="-", linewidth=0.5, color="#888"))
+    ax1.annotate("optional 16-byte tag", xy=(27, 1.0), xytext=(27, 1.65),
+                 fontsize=8.5, color="#222", ha="center",
+                 arrowprops=dict(arrowstyle="-", linewidth=0.5, color="#888"))
+
+    # Below the header: spell out the field breakdown horizontally as text.
+    ax1.text(3, -0.55,
+             "ver(1) + kind(1) + seq(2) + intent_id(2) = 6 bytes",
+             ha="center", va="top", fontsize=7.5, color="#444", style="italic")
+
     ax1.set_title("DCP frame layout", loc="left", pad=4, fontsize=10)
 
     # Bottom: size comparison bars.
@@ -249,15 +263,15 @@ def fig_footprint():
 # Figure 4 — Hallucination rejection rate (the killer experiment).
 
 def fig_hallucination():
-    fig, ax = plt.subplots(figsize=(6.8, 3.4))
+    fig, ax = plt.subplots(figsize=(9.0, 4.0))
 
     attacks = [
         "Out-of-range\nvalue",
         "Unit\nconfusion",
         "Wrong\ntype",
         "Unknown\nintent",
-        "Capability\nover-reach",
-        "Indirect\nprompt-injection",
+        "Capability\nescalation",
+        "Prompt\ninjection",
     ]
     series = {
         "DCP":     [100, 100, 100, 100, 100, 60],
@@ -265,7 +279,8 @@ def fig_hallucination():
         "Raw MCP": [30,    5,  95, 100,   0,  0],
         "OpenAPI": [70,    5, 100, 100,  50,  5],
     }
-    colors = {"DCP": C["dcp"], "IoT-MCP": C["iotmcp"], "Raw MCP": C["rawmcp"], "OpenAPI": C["openapi"]}
+    colors = {"DCP": C["dcp"], "IoT-MCP": C["iotmcp"],
+              "Raw MCP": C["rawmcp"], "OpenAPI": C["openapi"]}
 
     x = np.arange(len(attacks))
     width = 0.2
@@ -275,25 +290,28 @@ def fig_hallucination():
                       label=name, edgecolor="white", linewidth=0.4)
         for bar, v in zip(bars, vals):
             if v > 0:
-                ax.text(bar.get_x() + bar.get_width() / 2, v + 1.5,
+                ax.text(bar.get_x() + bar.get_width() / 2, v + 2,
                         f"{v}",
                         ha="center", va="bottom", fontsize=6.5, color="#333")
 
     ax.set_xticks(x)
-    ax.set_xticklabels(attacks, fontsize=8)
+    ax.set_xticklabels(attacks, fontsize=8.5)
     ax.set_ylabel("% of malformed/adversarial calls rejected\nbefore reaching device")
-    ax.set_ylim(0, 115)
+    ax.set_ylim(0, 118)
     ax.set_yticks([0, 25, 50, 75, 100])
-    ax.legend(loc="upper right", frameon=False, ncol=4, bbox_to_anchor=(1.0, 1.13))
+    ax.legend(loc="upper center", frameon=False, ncol=4, bbox_to_anchor=(0.5, 1.10))
     ax.grid(axis="y", linewidth=0.4, alpha=0.5)
     ax.set_axisbelow(True)
-    ax.text(-0.7, -25,
-            "Synthetic data for illustration. Values reflect what each protocol's "
-            "schema is expressive enough to reject at the host before any byte\n"
-            "reaches the device; they do not account for hand-written application code "
-            "that any of these protocols may layer on top.",
-            fontsize=7, color="#666", style="italic")
-    fig.tight_layout()
+
+    # Give the figure enough bottom margin for the footnote sitting below the
+    # x-axis category labels.
+    fig.subplots_adjust(bottom=0.27, top=0.88, left=0.08, right=0.98)
+    fig.text(0.5, 0.02,
+             "Synthetic data for illustration. Values reflect what each protocol's "
+             "schema is expressive enough to reject at the host\n"
+             "before any byte reaches the device — they do NOT account for "
+             "hand-written application code layered on top.",
+             ha="center", va="bottom", fontsize=7.5, color="#666", style="italic")
     save(fig, "hallucination")
 
 
