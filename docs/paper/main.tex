@@ -500,20 +500,33 @@ DCP-specific imports beyond \texttt{dcp.wire.intent\_id} and
 \texttt{dcp.framing.wrap/unwrap}. We expect future C, Rust, and Go ports
 to write equivalent runners.
 
-Figure~\ref{fig:latency} sketches the expected end-to-end latency profile
-across DCP's transports, decomposed into encode, wire-transit, decode,
-and handler-execution components. Wire-transit dominates on slow
-transports (UART, BLE); encode/decode are negligible. We include
-IoT-MCP's reported $\sim$\,205\,ms~\cite{iotmcp2025} as the reference
-baseline for the future measurement campaign.
+Figure~\ref{fig:latency} reports \emph{measured} end-to-end latency for a
+typical \texttt{set\_brightness} call--reply round-trip. Each bar is the
+median of 1000 timed calls; whiskers show the inter-quartile range. The
+measurements were taken with \texttt{tools/bench\_latency.py} against an
+in-process loopback transport and two physical boards. The loopback row
+isolates the protocol's own encode/decode cost at 0.02\,ms --- negligible
+relative to any real link. The two UART rows --- an ESP32-WROOM-32 behind
+a CH340 USB-UART bridge, and an ESP32-S3 over its native USB-Serial/JTAG
+interface --- both land at $\sim$15.6\,ms and within 0.05\,ms of each
+other. The round-trip is therefore dominated by serial-line transit and
+device-side handling, not by the host bridge or the choice of USB
+bridging chip.
+
+We do not plot a direct bar against IoT-MCP's reported
+$\sim$\,205\,ms~\cite{iotmcp2025}: that figure is an average response
+time measured under a different methodology and scope, and a fair
+head-to-head requires the controlled campaign described in our
+limitations.
 
 \begin{figure}[h]
 \centering
 \includegraphics[width=\linewidth]{latency.pdf}
-\caption{Anticipated end-to-end latency for a typical
-call--reply round-trip, broken down by stage. DCP figures are
-projections from microbenchmarks of the Python and C++ code paths in
-isolation; IoT-MCP is the reported value from~\cite{iotmcp2025}.}
+\caption{Measured end-to-end latency for a typical call--reply
+round-trip. Bars are medians over 1000 timed calls per transport;
+whiskers are the inter-quartile range. Source data:
+\texttt{docs/paper/figures/latency\_data.json}, produced by
+\texttt{tools/bench\_latency.py}.}
 \label{fig:latency}
 \end{figure}
 

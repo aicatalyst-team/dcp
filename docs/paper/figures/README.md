@@ -26,18 +26,25 @@ README / web preview) into this directory.
 
 ## What's synthetic vs measured
 
-**As of paper v0.1**: every numeric value in figures 3–5 is illustrative.
-The architecture diagram and the wire-format byte counts (Fig. 1, top half
-of Fig. 2) are exact.
+- **Fig. 1 (arch), Fig. 2 (wire format)** — exact. The diagram and the
+  byte counts are derived from the protocol itself.
+- **Fig. 5 (latency)** — **measured.** `fig_latency()` reads
+  `latency_data.json`, produced by `tools/bench_latency.py`: 1000 timed
+  round-trips per transport, median + IQR. Currently covers loopback,
+  ESP32-WROOM-32 (CH340), and ESP32-S3 (native USB).
+- **Fig. 3 (footprint)** — partially synthetic. The DCP bar is a design
+  target; the IoT-MCP / Direct-MCP / Matter bars are cited or typical.
+  Needs a rework: the DCP layer is now measured (~14 KB over an empty
+  sketch) and the figure should distinguish measured-DCP from cited
+  baselines cleanly, including the flash-vs-RAM axis.
+- **Fig. 4 (hallucination)** — synthetic, and labelled as such in the
+  figure footnote. Making it real needs an LLM adversarial-call
+  benchmark (≈1000 generated calls per baseline, with a defined
+  attack-generation procedure) — this is the v0.4 paper campaign.
 
-Once the hardware campaign is complete:
-
-- Fig. 3 — replace DCP "target" bars with measured values across
-  ESP32, ESP32-C3, nRF52840.
-- Fig. 4 — replace the synthetic rejection-rate values with measured
-  results from running 1000 LLM-generated adversarial calls against each
-  baseline; will need to define the attack-generation procedure.
-- Fig. 5 — replace with median + IQR from 1000 round-trips per transport.
+To re-measure latency: connect the board, run
+`python tools/bench_latency.py --serial <PORT> --label "..." --key <key>`,
+then `python make_figures.py`.
 
 Edit `make_figures.py` directly — each figure is one function. Re-run.
 Don't hand-edit the PDFs.

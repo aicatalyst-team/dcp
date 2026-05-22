@@ -1,0 +1,53 @@
+{
+  "loopback": {
+    "n": 1000,
+    "min": 0.0205,
+    "max": 0.6076,
+    "mean": 0.0258,
+    "median": 0.0231,
+    "p50": 0.0231,
+    "p90": 0.028,
+    "p99": 0.0809,
+    "stdev": 0.0207,
+    "q1": 0.0224,
+    "q3": 0.0241,
+    "iqr": 0.0017,
+    "label": "DCP loopback (in-process)",
+    "intent": "set_brightness",
+    "measured_at": "2026-05-22"
+  },
+  "uart_s3": {
+    "n": 1000,
+    "min": 14.5338,
+    "max": 16.7196,
+    "mean": 15.6137,
+    "median": 15.5984,
+    "p50": 15.5979,
+    "p90": 16.0979,
+    "p99": 16.5544,
+    "stdev": 0.3721,
+    "q1": 15.3554,
+    "q3": 15.875,
+    "iqr": 0.5196,
+    "label": "DCP UART 115200 (ESP32-S3, native USB)",
+    "intent": "set_brightness",
+    "measured_at": "2026-05-22"
+  },
+  "uart_wroom": {
+    "n": 1000,
+    "min": 14.6038,
+    "max": 16.7556,
+    "mean": 15.5651,
+    "median": 15.562,
+    "p50": 15.562,
+    "p90": 16.0722,
+    "p99": 16.52,
+    "stdev": 0.3791,
+    "q1": 15.274,
+    "q3": 15.8171,
+    "iqr": 0.5431,
+    "label": "DCP UART 115200 (ESP32-WROOM-32, CH340)",
+    "intent": "set_brightness",
+    "measured_at": "2026-05-22"
+  }
+}

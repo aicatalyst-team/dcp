@@ -12,6 +12,8 @@ of the paper.
 """
 from __future__ import annotations
 
+import json
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
@@ -317,45 +319,67 @@ def fig_hallucination():
 
 
 # ---------------------------------------------------------------------------
-# Figure 5 — End-to-end latency by transport (illustrative).
+# Figure 5 — End-to-end latency by transport (measured).
+#
+# Data comes from latency_data.json, produced by tools/bench_latency.py.
+# Each entry is 1000 timed round-trips of a set_brightness call. The figure
+# is always derived from that recorded measurement — never hand-typed.
 
 def fig_latency():
-    fig, ax = plt.subplots(figsize=(6.5, 2.6))
+    data_path = HERE / "latency_data.json"
+    if not data_path.exists():
+        raise FileNotFoundError(
+            "latency_data.json missing — run tools/bench_latency.py first "
+            "(--loopback and --serial <port>) to record measurements.")
+    data = json.loads(data_path.read_text(encoding="utf-8"))
 
-    transports = ["DCP\nloopback", "DCP\nUART 115200", "DCP\nMQTT (LAN)", "DCP\nBLE", "IoT-MCP\n[ref]"]
-    encode  = [0.3, 0.6,  1.0, 1.0, 3.0]
-    wire    = [0.0, 6.0,  3.0, 12.0, 12.0]
-    decode  = [0.4, 0.7,  0.8, 0.8, 4.0]
-    handler = [0.5, 0.5,  0.5, 0.5, 1.0]
-    response_wire = [0.0, 4.0, 2.5, 8.0, 10.0]
-    response_decode = [0.3, 0.6, 0.7, 0.7, 3.0]
+    # Baseline first, then the hardware transports.
+    order = ["loopback", "uart_wroom", "uart_s3"]
+    rows = [(k, data[k]) for k in order if k in data]
+    if not rows:
+        raise ValueError("latency_data.json has no recognised transport keys")
 
-    layers = [
-        ("encode",          encode,          C["dcp_lt"]),
-        ("wire out",        wire,            C["dcp"]),
-        ("device decode",   decode,          C["rawmcp"]),
-        ("handler",         handler,         C["openapi"]),
-        ("wire back",       response_wire,   C["matter"]),
-        ("host decode",     response_decode, "#bbbbbb"),
-    ]
+    short = {
+        "loopback":   "loopback\n(in-process baseline)",
+        "uart_wroom": "UART 115200\nWROOM-32 · CH340",
+        "uart_s3":    "UART 115200\nESP32-S3 · native USB",
+    }
+    palette = {"loopback": C["dcp_lt"], "uart_wroom": C["dcp"], "uart_s3": C["dcp"]}
 
-    bottom = np.zeros(len(transports))
-    for name, vals, color in layers:
-        ax.bar(transports, vals, bottom=bottom, color=color, label=name,
-               edgecolor="white", linewidth=0.4, width=0.55)
-        bottom += np.array(vals)
+    fig, ax = plt.subplots(figsize=(6.5, 2.5))
+    y = np.arange(len(rows))
+    medians  = [d["median"] for _, d in rows]
+    err_low  = [d["median"] - d["q1"] for _, d in rows]
+    err_high = [d["q3"] - d["median"] for _, d in rows]
+    colors   = [palette.get(k, C["dcp"]) for k, _ in rows]
 
-    for i, total in enumerate(bottom):
-        ax.text(i, total + 0.8, f"{total:.1f} ms",
-                ha="center", va="bottom", fontsize=8, color="#333", fontweight="bold")
+    ax.barh(y, medians, height=0.55, color=colors, edgecolor="white",
+            linewidth=0.5, xerr=[err_low, err_high],
+            error_kw=dict(ecolor="#333", capsize=3, lw=0.8))
+    ax.set_yticks(y)
+    ax.set_yticklabels([short.get(k, k) for k, _ in rows])
+    ax.invert_yaxis()
+    ax.set_xlim(0, max(medians) * 1.28)
+    ax.set_xlabel("round-trip latency (ms)  —  bar = median, whiskers = IQR")
+    ax.tick_params(axis="y", length=0)
 
-    ax.set_ylabel("end-to-end latency (ms)")
-    ax.set_ylim(0, max(bottom) * 1.18)
-    ax.legend(loc="upper left", frameon=False, ncol=3, fontsize=7,
-              bbox_to_anchor=(0.0, 1.15))
-    ax.tick_params(axis="x", length=0)
-    ax.set_title("End-to-end call latency, broken down (illustrative)",
-                 loc="left", pad=18, fontsize=10)
+    for yi, (_, d) in zip(y, rows):
+        ax.text(d["median"] + max(medians) * 0.02, yi,
+                f"{d['median']:.2f} ms", va="center", ha="left",
+                fontsize=8, color="#333", fontweight="bold")
+
+    n = rows[0][1]["n"]
+    ax.set_title(f"Measured round-trip call latency  "
+                 f"(set_brightness, N={n} per transport)",
+                 loc="left", fontsize=9.5, pad=8)
+
+    fig.subplots_adjust(bottom=0.30, top=0.86, left=0.26, right=0.97)
+    fig.text(0.5, 0.03,
+             "Measured by tools/bench_latency.py. The loopback row is the "
+             "protocol's own encode/decode cost with no wire;\nthe two UART "
+             "rows are real hardware. CH340 and native-USB transports land "
+             "within 0.05 ms of each other.",
+             ha="center", va="bottom", fontsize=7, color="#666", style="italic")
     save(fig, "latency")
 
 
