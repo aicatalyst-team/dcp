@@ -15,7 +15,7 @@ dcp: 0.3
 device:
   id:     smart-panel-01
   model:  lilygo_t_panel_s3_h720
-  vendor: deeplethe
+  vendor: deeplethe.com
 
 intents:
   # ─── v0.3 — visual + audio (no CAN needed) ───────────────────────
