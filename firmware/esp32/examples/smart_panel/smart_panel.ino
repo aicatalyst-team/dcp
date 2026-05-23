@@ -93,11 +93,11 @@ Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
     12, 13, 42, 46, 45,                      // R0..R4
     1, 20, 2, 0,
     1, 30, 8, 1,
-    10, 6'000'000L, false, 0, 0,
-    LCD_WIDTH * 10);   // bounce buffer = 10 rows in DRAM, fixes QSPI PSRAM bandwidth underrun
+    0, 16'000'000L, false, 0, 0,
+    LCD_WIDTH * 10);   // PCLK 16MHz + bounce buffer 10 rows
 Arduino_RGB_Display *gfx = new Arduino_RGB_Display(
     LCD_WIDTH, LCD_HEIGHT, rgbpanel, 0, true,
-    bus, -1, st7701_type9_init_operations, sizeof(st7701_type9_init_operations));
+    bus, -1, st7701_type8_init_operations, sizeof(st7701_type8_init_operations));
 
 TouchLib touch(Wire, IIC_SDA, IIC_SCL, CST3240_ADDR);
 #endif
@@ -486,10 +486,16 @@ void setup() {
     };
     xl_w(0x06, 0x00);  // CONFIG_PORT_0 = 0 → all OUTPUT
     xl_w(0x07, 0x00);  // CONFIG_PORT_1 = 0 → all OUTPUT
-    xl_w(0x02, 0xFF);  // OUTPUT_PORT_0 = 0xFF → all HIGH (releases LCD_RST, TOUCH_RST)
+    xl_w(0x02, 0xFF);  // OUTPUT_PORT_0 = 0xFF → all HIGH initially
     xl_w(0x03, 0xFF);  // OUTPUT_PORT_1 = 0xFF → all HIGH (CS/SCLK/MOSI idle high)
+    delay(10);
+    // Proper LCD_RST pulse: HIGH→LOW→HIGH gives ST7701 a real reset.
+    // LCD_RST is XL9535 P0.5, so clear bit 5 in port 0 output.
+    xl_w(0x02, 0xFF & ~(1 << 5));   // LCD_RST low
     delay(50);
-    Serial.println("[3b] XL9535 ports forced OUTPUT, LCD_RST released");
+    xl_w(0x02, 0xFF);               // LCD_RST high (release reset)
+    delay(200);                     // wait for ST7701 internal reset
+    Serial.println("[3b] XL9535 ports OUTPUT, LCD_RST pulsed");
     Serial.flush();
 
     // Note: do NOT ledcAttach BUZZER_PIN — Arduino's tone()/noTone() owns
@@ -501,11 +507,18 @@ void setup() {
     gfx->begin();
     Serial.println("[5] gfx->begin done");
 
-    gfx->fillScreen(0xFFFF);
+    // Fill BOTH frame buffers via explicit flush. Arduino_GFX with RGB
+    // panel double-buffers; flush() swaps + redraws so both copies match.
+    for (int i = 0; i < 4; i++) {
+        gfx->fillScreen(0xFFFF);
+        gfx->flush();
+    }
     gfx->setTextColor(0x0000);
     gfx->setTextSize(3);
     gfx->setCursor(10, 200);
     gfx->print("DCP smart-panel-01");
+    gfx->flush();
+    gfx->flush();   // second flush so the OTHER buffer also has text
     Serial.println("[6] draw done");
 
     touch.init();
