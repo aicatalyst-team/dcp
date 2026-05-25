@@ -1,197 +1,149 @@
-// Smart Panel — DCP firmware for LILYGO T-Panel S3 (H720 CAN FD variant).
+// Smart Panel — DCP + LVGL demo firmware for LILYGO T-Panel S3.
 //
-// This is the v0.3 + v0.4 demo firmware. It exposes 12 intents and 2 events
-// over UART-DCP, matching examples/smart_panel_manifest.yaml.
+// Mirrors the LilyGo factory Lvgl.ino panel/LVGL config 1:1 (PCLK 6MHz,
+// library's built-in st7701_type9 init, full_refresh=1, DRAM draw buffers),
+// then layers DCP intent handlers on top so an MCP host can drive the
+// LVGL widgets remotely.
 //
-// Hardware: LILYGO T-Panel S3, ST7701S 4" 480×480 IPS, CST3240 capacitive
-// touch, MORNSUN TD501MCANFD CAN FD transceiver (classic CAN @ 500kbps via
-// ESP32-S3 TWAI), XL9535 GPIO expander.
+// Earlier attempts that diverged from the official config (16MHz PCLK,
+// custom RGB565 init, partial-refresh LVGL) all produced the 2-frame
+// ping-pong artifact. The official config is the only one that's known
+// to render cleanly on this hardware.
 //
-// Required libraries (Arduino Library Manager):
-//   - GFX Library for Arduino (Arduino_GFX, by moononournation)
-//   - TouchLib (by mmMicky)
-//
-// Build target: ESP32S3 Dev Module, Flash 16MB, PSRAM OPI 8MB.
-
-// Temporary bring-up flag: skip all LCD/touch init so the firmware boots
-// on boards where PSRAM is absent or the RGB panel config is wrong.
-// DCP UART + buzzer + CAN keep working; display handlers become no-ops.
-#define DCP_NO_DISPLAY 1
+// Build target: Arduino-ESP32 2.0.14 + Arduino_GFX 1.4.6 + LVGL 8.3.5.
+//   Board:     ESP32S3 Dev Module
+//   PSRAM:     QSPI (8MB)
+//   FlashSize: 16M
+//   USBMode:   hwcdc
+//   CDCOnBoot: cdc
 
 #include "DCP.h"
 #include "DCPCrypto.h"
 #include <Arduino.h>
 #include <Wire.h>
-#if !DCP_NO_DISPLAY
+#include <lvgl.h>
 #include <Arduino_GFX_Library.h>
-// TouchLib needs the chip model selected before the header is included.
-// The T-Panel S3's CST3240 is a mutual-capacitance controller.
 #define TOUCH_MODULES_CST_MUTUAL
 #include "TouchLib.h"
-#endif
 #include "driver/twai.h"
 
-// ───────── Pin definitions (from T-Panel pin_config.h) ─────────
-#define IIC_SDA       17
-#define IIC_SCL       18
-#define TOUCH_INT     21
-#define LCD_WIDTH     480
-#define LCD_HEIGHT    480
-#define LCD_BL        14
-#define CAN_TX        16
-#define CAN_RX        15
-// ⚠ Pin 19/20 on ESP32-S3 are USB D-/D+. Driving them as a GPIO output
-// disconnects the native USB-Serial/JTAG and makes the COM port vanish.
-// Anything user-added (buzzer, extra LED, etc.) on this board should be
-// on a pin that the RGB display, I2C, CAN, touch, PSRAM, and USB are
-// not already using. GPIO 38 is free and PWM-capable.
-#define BUZZER_PIN    38           // user-added: solder piezo or PAM8403 + 8Ω here
-#define DCP_UART      Serial1      // dedicated UART for the DCP host link
-#define DCP_TX        47           // ⚠ shared with ESP32-H2 RX; if conflict use 3/8
-#define DCP_RX        48           // ⚠ shared with ESP32-H2 TX; same caveat
-// Default DCP transport is the USB CDC Serial — use that for first bring-up,
-// switch to Serial1 + above pins for production.
-
-// XL9535 (GPIO expander on I2C) — pin map within the expander
+// ───────── Pin definitions (from LilyGo Mylibrary/pin_config.h) ─────────
+#define IIC_SDA           17
+#define IIC_SCL           18
+#define TOUCH_INT         21
+#define LCD_WIDTH         480
+#define LCD_HEIGHT        480
+#define LCD_VSYNC         40
+#define LCD_HSYNC         39
+#define LCD_PCLK          41
+#define LCD_B0 1
+#define LCD_B1 2
+#define LCD_B2 3
+#define LCD_B3 4
+#define LCD_B4 5
+#define LCD_G0 6
+#define LCD_G1 7
+#define LCD_G2 8
+#define LCD_G3 9
+#define LCD_G4 10
+#define LCD_G5 11
+#define LCD_R0 12
+#define LCD_R1 13
+#define LCD_R2 42
+#define LCD_R3 46
+#define LCD_R4 45
+#define LCD_BL            14
+#define CAN_TX            16
+#define CAN_RX            15
+#define BUZZER_PIN        38       // GPIO 19/20 = USB D-/D+; 38 is free PWM
 #define XL95X5_CS         17
 #define XL95X5_SCLK       15
 #define XL95X5_MOSI       16
 #define XL95X5_TOUCH_RST  4
 #define XL95X5_LCD_RST    5
-#define CST3240_ADDR      0x5A
+#define CST3240_ADDRESS   0x5A
 
-constexpr int PWM_BL_HZ    = 5000;
-constexpr int PWM_BUZZER_HZ_PLACEHOLDER = 1000;   // overwritten per-note
-constexpr int PWM_BITS     = 8;
-
-// ───────── Global state ─────────
+// ───────── State ─────────
 static float    g_backlight = 50.0f;
 static uint8_t  g_r = 0, g_g = 0, g_b = 0;
 static int16_t  g_last_touch_x = -1, g_last_touch_y = -1;
 static bool     g_touch_pressed = false;
 
-// Last received CAN frame, for can_receive_last() intent.
-static volatile bool      g_can_have_last = false;
-static twai_message_t     g_can_last;
+static volatile bool g_can_have_last = false;
+static twai_message_t g_can_last;
 
-// Score playback state (set by play_score, advanced in loop())
 struct ScoreNote { uint16_t freq_hz; uint16_t duration_ms; };
 static ScoreNote g_score[64];
-static uint8_t   g_score_len = 0;
-static uint8_t   g_score_pos = 0;
-static uint32_t  g_score_next_ms = 0;
-static bool      g_score_playing = false;
+static uint8_t  g_score_len = 0;
+static uint8_t  g_score_pos = 0;
+static uint32_t g_score_next_ms = 0;
+static bool     g_score_playing = false;
 
-// ───────── Display objects ─────────
-#if !DCP_NO_DISPLAY
+volatile bool Touch_Int_Flag = false;
+
+// ───────── Display objects (mirror official Lvgl.ino) ─────────
+TouchLib touch(Wire, IIC_SDA, IIC_SCL, CST3240_ADDRESS);
+
 Arduino_DataBus *bus = new Arduino_XL9535SWSPI(
     IIC_SDA, IIC_SCL, -1, XL95X5_CS, XL95X5_SCLK, XL95X5_MOSI);
 Arduino_ESP32RGBPanel *rgbpanel = new Arduino_ESP32RGBPanel(
-    -1, 40, 39, 41,
-    1, 2, 3, 4, 5,                           // B0..B4
-    6, 7, 8, 9, 10, 11,                      // G0..G5
-    12, 13, 42, 46, 45,                      // R0..R4
-    1, 20, 2, 0,
-    1, 30, 8, 1,
-    10, 12'000'000L, false, 0, 0);   // PCLK 12MHz, no bounce buffer
-// Custom ST7701 init: byte-for-byte copy of st7701_type9_init_operations
-// (panel-matching gamma/voltage/timing for the LilyGo 4" 480x480 ST7701S),
-// with ONE change: COLMOD (0x3A) set to 0x50 (RGB565) instead of 0x60
-// (RGB666). With 16 RGB data lines wired (5+6+5) we must tell the panel
-// to expect 16-bit pixels, not 18-bit, or it decodes our pixels wrong.
-static const uint8_t custom_st7701_rgb565_init[] = {
-    BEGIN_WRITE,
-    WRITE_COMMAND_8, 0xFF,
-    WRITE_BYTES, 5, 0x77, 0x01, 0x00, 0x00, 0x10,
-    WRITE_C8_D16, 0xC0, 0x3B, 0x00,
-    WRITE_C8_D16, 0xC1, 0x0D, 0x02,
-    WRITE_C8_D16, 0xC2, 0x31, 0x05,
-    WRITE_C8_D8, 0xCD, 0x00,
-    WRITE_COMMAND_8, 0xB0,
-    WRITE_BYTES, 16,
-    0x00, 0x11, 0x18, 0x0E, 0x11, 0x06, 0x07, 0x08,
-    0x07, 0x22, 0x04, 0x12, 0x0F, 0xAA, 0x31, 0x18,
-    WRITE_COMMAND_8, 0xB1,
-    WRITE_BYTES, 16,
-    0x00, 0x11, 0x19, 0x0E, 0x12, 0x07, 0x08, 0x08,
-    0x08, 0x22, 0x04, 0x11, 0x11, 0xA9, 0x32, 0x18,
-    WRITE_COMMAND_8, 0xFF,
-    WRITE_BYTES, 5, 0x77, 0x01, 0x00, 0x00, 0x11,
-    WRITE_C8_D8, 0xB0, 0x60,
-    WRITE_C8_D8, 0xB1, 0x32,
-    WRITE_C8_D8, 0xB2, 0x07,
-    WRITE_C8_D8, 0xB3, 0x80,
-    WRITE_C8_D8, 0xB5, 0x49,
-    WRITE_C8_D8, 0xB7, 0x85,
-    WRITE_C8_D8, 0xB8, 0x21,
-    WRITE_C8_D8, 0xC1, 0x78,
-    WRITE_C8_D8, 0xC2, 0x78,
-    WRITE_COMMAND_8, 0xE0,
-    WRITE_BYTES, 3, 0x00, 0x1B, 0x02,
-    WRITE_COMMAND_8, 0xE1,
-    WRITE_BYTES, 11,
-    0x08, 0xA0, 0x00, 0x00, 0x07, 0xA0, 0x00, 0x00, 0x00, 0x44, 0x44,
-    WRITE_COMMAND_8, 0xE2,
-    WRITE_BYTES, 12,
-    0x11, 0x11, 0x44, 0x44, 0xED, 0xA0, 0x00, 0x00, 0xEC, 0xA0, 0x00, 0x00,
-    WRITE_COMMAND_8, 0xE3,
-    WRITE_BYTES, 4, 0x00, 0x00, 0x11, 0x11,
-    WRITE_C8_D16, 0xE4, 0x44, 0x44,
-    WRITE_COMMAND_8, 0xE5,
-    WRITE_BYTES, 16,
-    0x0A, 0xE9, 0xD8, 0xA0, 0x0C, 0xEB, 0xD8, 0xA0,
-    0x0E, 0xED, 0xD8, 0xA0, 0x10, 0xEF, 0xD8, 0xA0,
-    WRITE_COMMAND_8, 0xE6,
-    WRITE_BYTES, 4, 0x00, 0x00, 0x11, 0x11,
-    WRITE_C8_D16, 0xE7, 0x44, 0x44,
-    WRITE_COMMAND_8, 0xE8,
-    WRITE_BYTES, 16,
-    0x09, 0xE8, 0xD8, 0xA0, 0x0B, 0xEA, 0xD8, 0xA0,
-    0x0D, 0xEC, 0xD8, 0xA0, 0x0F, 0xEE, 0xD8, 0xA0,
-    WRITE_COMMAND_8, 0xEB,
-    WRITE_BYTES, 7,
-    0x02, 0x00, 0xE4, 0xE4, 0x88, 0x00, 0x40,
-    WRITE_C8_D16, 0xEC, 0x3C, 0x00,
-    WRITE_COMMAND_8, 0xED,
-    WRITE_BYTES, 16,
-    0xAB, 0x89, 0x76, 0x54, 0x02, 0xFF, 0xFF, 0xFF,
-    0xFF, 0xFF, 0xFF, 0x20, 0x45, 0x67, 0x98, 0xBA,
-    WRITE_COMMAND_8, 0xFF,
-    WRITE_BYTES, 5, 0x77, 0x01, 0x00, 0x00, 0x13,
-    WRITE_C8_D8, 0xE5, 0xE4,
-    WRITE_COMMAND_8, 0xFF,
-    WRITE_BYTES, 5, 0x77, 0x01, 0x00, 0x00, 0x00,
-    WRITE_C8_D8, 0x3A, 0x50,   // ★ THE CHANGE: 0x50 = RGB565 (was 0x60 = RGB666)
-    WRITE_COMMAND_8, 0x11,
-    END_WRITE,
-    DELAY, 120,
-    BEGIN_WRITE,
-    WRITE_COMMAND_8, 0x29,
-    END_WRITE
-};
-
+    -1, LCD_VSYNC, LCD_HSYNC, LCD_PCLK,
+    LCD_B0, LCD_B1, LCD_B2, LCD_B3, LCD_B4,
+    LCD_G0, LCD_G1, LCD_G2, LCD_G3, LCD_G4, LCD_G5,
+    LCD_R0, LCD_R1, LCD_R2, LCD_R3, LCD_R4,
+    1 /* hsync_pol */, 20, 2, 0,
+    1 /* vsync_pol */, 30, 8, 1,
+    10 /* pclk_active_neg */, 6000000L /* PCLK 6MHz — official value */,
+    false /* useBigEndian */, 0, 0);
 Arduino_RGB_Display *gfx = new Arduino_RGB_Display(
-    LCD_WIDTH, LCD_HEIGHT, rgbpanel, 0, true,
-    bus, -1, custom_st7701_rgb565_init, sizeof(custom_st7701_rgb565_init));
+    LCD_WIDTH, LCD_HEIGHT, rgbpanel, 0, true /* auto_flush */,
+    bus, -1, st7701_type9_init_operations, sizeof(st7701_type9_init_operations));
 
-TouchLib touch(Wire, IIC_SDA, IIC_SCL, CST3240_ADDR);
+// ───────── LVGL setup ─────────
+static lv_disp_draw_buf_t draw_buf;
+static lv_disp_drv_t  disp_drv;
+static lv_indev_drv_t indev_drv;
+
+static lv_obj_t *g_header_label;
+static lv_obj_t *g_text_labels[4];
+static lv_obj_t *g_color_swatch;
+
+// Diagnostic: count flushes so we can detect runaway redraws.
+static volatile uint32_t g_flush_count = 0;
+static uint32_t g_last_flush_log_ms = 0;
+
+static void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
+    uint32_t w = area->x2 - area->x1 + 1;
+    uint32_t h = area->y2 - area->y1 + 1;
+#if (LV_COLOR_16_SWAP != 0)
+    gfx->draw16bitBeRGBBitmap(area->x1, area->y1, (uint16_t *)&color_p->full, w, h);
+#else
+    gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)&color_p->full, w, h);
 #endif
-
-// ───────── DCP intent handlers ─────────
-
-static dcp::Status read_int(dcp::CborReader& p, const char* key, size_t klen,
-                            int64_t* out) {
-    const char* k; size_t kl;
-    while (p.remaining() > 0) {
-        if (!p.next_key(&k, &kl)) return dcp::STATUS_DENIED;
-        if (kl == klen && memcmp(k, key, klen) == 0) {
-            return p.read_int(out) ? dcp::STATUS_OK : dcp::STATUS_RANGE;
-        }
-        p.skip();
-    }
-    return dcp::STATUS_RANGE;   // key not found
+    g_flush_count++;
+    lv_disp_flush_ready(disp);
 }
 
+static void my_touchpad_read(lv_indev_drv_t *drv, lv_indev_data_t *data) {
+    if (Touch_Int_Flag) {
+        touch.read();
+        TP_Point t = touch.getPoint(0);
+        if (touch.getPointNum() == 1 && t.pressure > 0 && t.state != 0) {
+            data->state = LV_INDEV_STATE_PR;
+            data->point.x = t.x;
+            data->point.y = t.y;
+            g_touch_pressed = true;
+            g_last_touch_x = t.x;
+            g_last_touch_y = t.y;
+        }
+        Touch_Int_Flag = false;
+    } else {
+        data->state = LV_INDEV_STATE_REL;
+        g_touch_pressed = false;
+    }
+}
+
+// ───────── DCP intent handlers ─────────
 static dcp::Status h_set_backlight(uint8_t kind, dcp::CborReader& params,
                                    dcp::CborMap& reply, void*) {
     double level = 50.0;
@@ -203,12 +155,10 @@ static dcp::Status h_set_backlight(uint8_t kind, dcp::CborReader& params,
         } else { params.skip(); }
     }
     if (level < 0 || level > 100) return dcp::STATUS_RANGE;
-    if (kind == dcp::KIND_DRY_RUN) {
-        reply.add_float("would_set", level);
-        return dcp::STATUS_OK;
-    }
+    if (kind == dcp::KIND_DRY_RUN) { reply.add_float("would_set", level); return dcp::STATUS_OK; }
     g_backlight = (float)level;
-    ledcWrite(LCD_BL, (uint32_t)(g_backlight * 2.55f));
+    // Simple on/off backlight — official example just digitalWrites LCD_BL HIGH.
+    digitalWrite(LCD_BL, level > 0 ? HIGH : LOW);
     return dcp::STATUS_OK;
 }
 
@@ -229,16 +179,15 @@ static dcp::Status h_set_color(uint8_t kind, dcp::CborReader& params,
         return dcp::STATUS_OK;
     }
     g_r = (uint8_t)r; g_g = (uint8_t)g; g_b = (uint8_t)b;
-#if !DCP_NO_DISPLAY
-    uint16_t rgb565 = gfx->color565(g_r, g_g, g_b);
-    gfx->fillRect(20, 360, 440, 100, rgb565);   // bottom color swatch
-#endif
+    if (g_color_swatch) {
+        lv_obj_set_style_bg_color(g_color_swatch, lv_color_make(g_r, g_g, g_b), LV_PART_MAIN);
+    }
     return dcp::STATUS_OK;
 }
 
 static dcp::Status h_display_text(uint8_t, dcp::CborReader& params,
                                   dcp::CborMap&, void*) {
-    char buf[24] = {0};
+    char buf[32] = {0};
     int64_t line = 0, size = 2;
     while (params.remaining() > 0) {
         const char* k; size_t kl;
@@ -246,28 +195,26 @@ static dcp::Status h_display_text(uint8_t, dcp::CborReader& params,
         if (kl == 4 && memcmp(k, "text", 4) == 0) {
             const char* s; size_t slen;
             if (!params.read_string(&s, &slen)) return dcp::STATUS_RANGE;
-            memcpy(buf, s, slen < 23 ? slen : 23);
+            memcpy(buf, s, slen < 31 ? slen : 31);
         } else if (kl == 4 && memcmp(k, "line", 4) == 0) {
             if (!params.read_int(&line)) return dcp::STATUS_RANGE;
         } else if (kl == 4 && memcmp(k, "size", 4) == 0) {
             if (!params.read_int(&size)) return dcp::STATUS_RANGE;
         } else { params.skip(); }
     }
-#if !DCP_NO_DISPLAY
-    gfx->setTextSize((uint8_t)size);
-    gfx->setCursor(10, 20 + (int)line * 32 * (int)size);
-    gfx->setTextColor(0xFFFF, 0x0000);
-    gfx->print(buf);
-#else
-    (void)buf; (void)line; (void)size;
-#endif
+    if (line < 0 || line >= 4) return dcp::STATUS_RANGE;
+    if (g_text_labels[line]) lv_label_set_text(g_text_labels[line], buf);
     return dcp::STATUS_OK;
 }
 
 static dcp::Status h_clear_screen(uint8_t, dcp::CborReader&, dcp::CborMap&, void*) {
-#if !DCP_NO_DISPLAY
-    gfx->fillScreen(0);
-#endif
+    for (int i = 0; i < 4; i++) {
+        if (g_text_labels[i]) lv_label_set_text(g_text_labels[i], "");
+    }
+    if (g_color_swatch) {
+        lv_obj_set_style_bg_color(g_color_swatch, lv_color_black(), LV_PART_MAIN);
+    }
+    g_r = g_g = g_b = 0;
     return dcp::STATUS_OK;
 }
 
@@ -282,16 +229,11 @@ static dcp::Status h_play_tone(uint8_t kind, dcp::CborReader& params,
         else                                               { params.skip(); }
     }
     if (freq < 50 || freq > 5000 || duration < 10 || duration > 5000) return dcp::STATUS_RANGE;
-    if (kind == dcp::KIND_DRY_RUN) {
-        reply.add_int("would_play_hz", freq);
-        return dcp::STATUS_OK;
-    }
+    if (kind == dcp::KIND_DRY_RUN) { reply.add_int("would_play_hz", freq); return dcp::STATUS_OK; }
     tone(BUZZER_PIN, (uint32_t)freq, (uint32_t)duration);
     return dcp::STATUS_OK;
 }
 
-// Parses one MML token, e.g. "C4q", "G#4h", "R8e"; returns false on end.
-// Writes freq_hz=0 for rests. Duration_ms is computed against tempo.
 static bool parse_mml_note(const char*& s, const char* end, uint16_t tempo,
                            uint16_t& freq_hz, uint16_t& dur_ms) {
     while (s < end && (*s == ' ' || *s == '\t' || *s == ',')) ++s;
@@ -303,8 +245,6 @@ static bool parse_mml_note(const char*& s, const char* end, uint16_t tempo,
     char durch = (s < end) ? *s++ : 'q';
     bool dotted = (s < end && *s == '.');
     if (dotted) ++s;
-
-    // Chromatic index from C: C=0 D=2 E=4 F=5 G=7 A=9 B=11
     int chromatic = -1;
     switch (letter) {
         case 'C': chromatic = 0;  break;
@@ -318,25 +258,21 @@ static bool parse_mml_note(const char*& s, const char* end, uint16_t tempo,
         default:            freq_hz = 0; break;
     }
     if (chromatic >= 0) {
-        // MIDI note number: 12*(octave+1) + chromatic. A4 (440Hz) = MIDI 69.
         int midi = 12 * (octave + 1) + chromatic + semitone_offset;
         freq_hz = (uint16_t)(440.0f * powf(2.0f, (midi - 69) / 12.0f));
     }
-    {
-        // beat ms at 4/4 quarter = 60000 / tempo
-        uint32_t beat_ms = 60000UL / (tempo ? tempo : 120);
-        uint32_t d;
-        switch (durch) {
-            case 'w': d = beat_ms * 4; break;
-            case 'h': d = beat_ms * 2; break;
-            case 'q': d = beat_ms; break;
-            case 'e': d = beat_ms / 2; break;
-            case 's': d = beat_ms / 4; break;
-            default:  d = beat_ms; break;
-        }
-        if (dotted) d = (d * 3) / 2;
-        dur_ms = (uint16_t)d;
+    uint32_t beat_ms = 60000UL / (tempo ? tempo : 120);
+    uint32_t d;
+    switch (durch) {
+        case 'w': d = beat_ms * 4; break;
+        case 'h': d = beat_ms * 2; break;
+        case 'q': d = beat_ms; break;
+        case 'e': d = beat_ms / 2; break;
+        case 's': d = beat_ms / 4; break;
+        default:  d = beat_ms; break;
     }
+    if (dotted) d = (d * 3) / 2;
+    dur_ms = (uint16_t)d;
     return true;
 }
 
@@ -355,8 +291,6 @@ static dcp::Status h_play_score(uint8_t kind, dcp::CborReader& params,
     }
     if (!mel || mlen == 0) return dcp::STATUS_RANGE;
     if (tempo < 40 || tempo > 240) return dcp::STATUS_RANGE;
-
-    // Parse the melody into our score buffer.
     const char* s = mel; const char* end = mel + mlen;
     g_score_len = 0;
     uint16_t total_ms = 0;
@@ -366,17 +300,15 @@ static dcp::Status h_play_score(uint8_t kind, dcp::CborReader& params,
         g_score[g_score_len++] = { f, d };
         total_ms += d;
     }
-
     if (kind == dcp::KIND_DRY_RUN) {
-        reply.add_int("notes",      g_score_len);
+        reply.add_int("notes", g_score_len);
         reply.add_int("duration_ms", total_ms);
         g_score_len = 0;
         return dcp::STATUS_OK;
     }
-
-    g_score_pos      = 0;
-    g_score_next_ms  = millis();
-    g_score_playing  = true;
+    g_score_pos = 0;
+    g_score_next_ms = millis();
+    g_score_playing = true;
     return dcp::STATUS_OK;
 }
 
@@ -418,20 +350,14 @@ static dcp::Status h_can_send(uint8_t kind, dcp::CborReader& params,
         if (h < 0 || l < 0) return dcp::STATUS_RANGE;
         msg.data[i / 2] = (uint8_t)((h << 4) | l);
     }
-    if (kind == dcp::KIND_DRY_RUN) {
-        reply.add_int("would_send_id", id);
-        return dcp::STATUS_OK;
-    }
+    if (kind == dcp::KIND_DRY_RUN) { reply.add_int("would_send_id", id); return dcp::STATUS_OK; }
     if (twai_transmit(&msg, pdMS_TO_TICKS(50)) != ESP_OK) return dcp::STATUS_BUSY;
     return dcp::STATUS_OK;
 }
 
 static dcp::Status h_can_receive_last(uint8_t, dcp::CborReader&,
                                       dcp::CborMap& reply, void*) {
-    if (!g_can_have_last) {
-        reply.add_string("value", "");
-        return dcp::STATUS_OK;
-    }
+    if (!g_can_have_last) { reply.add_string("value", ""); return dcp::STATUS_OK; }
     char buf[48];
     int n = snprintf(buf, sizeof(buf), "id=0x%x data=", (unsigned)g_can_last.identifier);
     for (int i = 0; i < g_can_last.data_length_code && n < (int)sizeof(buf) - 3; ++i) {
@@ -441,7 +367,6 @@ static dcp::Status h_can_receive_last(uint8_t, dcp::CborReader&,
     return dcp::STATUS_OK;
 }
 
-// v0.5 stubs — return denied for now.
 static dcp::Status h_move_motor(uint8_t, dcp::CborReader&, dcp::CborMap&, void*) {
     return dcp::STATUS_DENIED;
 }
@@ -449,7 +374,6 @@ static dcp::Status h_read_motor_position(uint8_t, dcp::CborReader&, dcp::CborMap
     return dcp::STATUS_DENIED;
 }
 
-// ───────── DCP binding table — keep in sync with smart_panel_manifest.yaml ─────────
 static dcp::IntentBinding bindings[] = {
     { DCP_ID("set_backlight"),       h_set_backlight,       nullptr },
     { DCP_ID("set_color"),           h_set_color,           nullptr },
@@ -461,12 +385,12 @@ static dcp::IntentBinding bindings[] = {
     { DCP_ID("read_touch"),          h_read_touch,          nullptr },
     { DCP_ID("can_send"),            h_can_send,            nullptr },
     { DCP_ID("can_receive_last"),    h_can_receive_last,    nullptr },
-    { DCP_ID("move_motor"),          h_move_motor,          nullptr },     // v0.5 stub
-    { DCP_ID("read_motor_position"), h_read_motor_position, nullptr },     // v0.5 stub
+    { DCP_ID("move_motor"),          h_move_motor,          nullptr },
+    { DCP_ID("read_motor_position"), h_read_motor_position, nullptr },
 };
 static dcp::DCP* dcp_link = nullptr;
 
-// ───────── CAN init ─────────
+// ───────── CAN / score / touch pumps ─────────
 static void init_can() {
     twai_general_config_t g = TWAI_GENERAL_CONFIG_DEFAULT(
         (gpio_num_t)CAN_TX, (gpio_num_t)CAN_RX, TWAI_MODE_NORMAL);
@@ -480,11 +404,9 @@ static void pump_can() {
     while (twai_receive(&msg, 0) == ESP_OK) {
         g_can_last = msg;
         g_can_have_last = true;
-        // TODO: emit `can_received` DCP event back to host. v0.4 work.
     }
 }
 
-// ───────── Score scheduler ─────────
 static void pump_score() {
     if (!g_score_playing) return;
     uint32_t now = millis();
@@ -495,117 +417,135 @@ static void pump_score() {
         return;
     }
     ScoreNote& n = g_score[g_score_pos++];
-    if (n.freq_hz == 0) {
-        noTone(BUZZER_PIN);
-    } else {
-        tone(BUZZER_PIN, n.freq_hz);
-    }
+    if (n.freq_hz == 0) noTone(BUZZER_PIN);
+    else                tone(BUZZER_PIN, n.freq_hz);
     g_score_next_ms = now + n.duration_ms;
 }
 
-// ───────── Touch polling ─────────
-#if !DCP_NO_DISPLAY
-static void pump_touch() {
-    if (!touch.read()) {
-        g_touch_pressed = false;
-        return;
+// ───────── LVGL UI ─────────
+static void build_ui() {
+    lv_obj_t *scr = lv_scr_act();
+    lv_obj_set_style_bg_color(scr, lv_color_white(), LV_PART_MAIN);
+    // Kill scrollbar/scroll on the screen too — it has the same fade behavior
+    // as lv_obj_create children.
+    lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_OFF);
+
+    g_header_label = lv_label_create(scr);
+    lv_label_set_text(g_header_label, "DCP smart-panel-01");
+    lv_obj_set_style_text_color(g_header_label, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(g_header_label, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_align(g_header_label, LV_ALIGN_TOP_LEFT, 10, 10);
+
+    for (int i = 0; i < 4; i++) {
+        g_text_labels[i] = lv_label_create(scr);
+        lv_label_set_text(g_text_labels[i], "");
+        lv_obj_set_style_text_color(g_text_labels[i], lv_color_black(), LV_PART_MAIN);
+        lv_obj_set_style_text_font(g_text_labels[i], &lv_font_montserrat_14, LV_PART_MAIN);
+        lv_obj_align(g_text_labels[i], LV_ALIGN_TOP_LEFT, 10, 50 + i * 50);
     }
-    TP_Point p = touch.getPoint(0);
-    g_touch_pressed = true;
-    g_last_touch_x = p.x;
-    g_last_touch_y = p.y;
-    // TODO: emit `touch_pressed` DCP event with x/y/region. v0.4 work.
+
+    g_color_swatch = lv_obj_create(scr);
+    lv_obj_set_size(g_color_swatch, 440, 110);
+    lv_obj_align(g_color_swatch, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_set_style_bg_color(g_color_swatch, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(g_color_swatch, 1, LV_PART_MAIN);
+    // Kill the scrollbar fade animation — it forces continuous redraws on
+    // this region every frame, which is exactly the "middle flickering" symptom.
+    lv_obj_clear_flag(g_color_swatch, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollbar_mode(g_color_swatch, LV_SCROLLBAR_MODE_OFF);
 }
-#else
-static void pump_touch() {}
-#endif
+
+static void lvgl_init_displays() {
+    lv_init();
+
+    uint32_t W = gfx->width(), H = gfx->height();
+
+    // Official sample allocates draw buffers with MALLOC_CAP_INTERNAL.
+    lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(
+        sizeof(lv_color_t) * LCD_WIDTH * 40, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(
+        sizeof(lv_color_t) * LCD_WIDTH * 40, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    while (!buf1 || !buf2) {
+        Serial.println("LVGL draw buf alloc failed!");
+        delay(1000);
+    }
+    lv_disp_draw_buf_init(&draw_buf, buf1, buf2, LCD_WIDTH * 40);
+
+    lv_disp_drv_init(&disp_drv);
+    disp_drv.hor_res = W;
+    disp_drv.ver_res = H;
+    disp_drv.flush_cb = my_disp_flush;
+    disp_drv.draw_buf = &draw_buf;
+    // full_refresh=0 (default): only redraw dirty regions. With static
+    // widgets and DCP-driven updates, the panel goes idle between events
+    // → no continuous repaint → no visible flicker.
+    disp_drv.full_refresh = 0;
+    lv_disp_drv_register(&disp_drv);
+
+    lv_indev_drv_init(&indev_drv);
+    indev_drv.type = LV_INDEV_TYPE_POINTER;
+    indev_drv.read_cb = my_touchpad_read;
+    lv_indev_drv_register(&indev_drv);
+}
 
 // ───────── Setup / loop ─────────
 void setup() {
-    Serial.begin(115200);   // bring-up over USB-CDC first; switch to Serial1 for prod
-    delay(3000);            // diagnostic: wait long enough for host to grab CDC
+    Serial.begin(115200);
+    delay(2000);
     Serial.println("[1] setup start");
-    Serial.flush();
 
-    // Diagnostic: force backlight ON with plain GPIO, skip LEDC entirely.
     pinMode(LCD_BL, OUTPUT);
     digitalWrite(LCD_BL, HIGH);
-    Serial.println("[2] backlight HIGH");
-
-    // XL9535 (TCA9535) is rated max 400kHz — 800kHz was a bad idea.
-    Wire.begin(IIC_SDA, IIC_SCL, 400000);
-    Serial.println("[3] Wire begin");
-
-    // I2C scan — must see XL9535 (0x20) for LCD_RST control, CST3240 (0x5A) for touch.
-    Serial.print("[3a] I2C scan:");
-    int found = 0;
-    for (uint8_t addr = 1; addr < 127; addr++) {
-        Wire.beginTransmission(addr);
-        if (Wire.endTransmission() == 0) {
-            Serial.printf(" 0x%02x", addr);
-            found++;
-        }
-    }
-    Serial.printf("  (%d devices)\n", found);
-
-    // WORKAROUND: Arduino_XL9535SWSPI::begin() only sets port 0 to OUTPUT,
-    // leaving port 1 (where CS=17 SCLK=15 MOSI=16 live, per the lib's
-    // P1.x = 10..17 addressing) as INPUT. The bit-banged SPI writes never
-    // drive the lines, so the LCD never receives its init sequence.
-    // Force both ports to OUTPUT and drive everything HIGH (releases
-    // LCD_RST on P0.5, parks CS/SCLK/MOSI in idle state).
-    auto xl_w = [](uint8_t reg, uint8_t val) {
-        Wire.beginTransmission(0x20);
-        Wire.write(reg); Wire.write(val);
-        Wire.endTransmission();
-    };
-    xl_w(0x06, 0x00);  // CONFIG_PORT_0 = 0 → all OUTPUT
-    xl_w(0x07, 0x00);  // CONFIG_PORT_1 = 0 → all OUTPUT
-    xl_w(0x02, 0xFF);  // OUTPUT_PORT_0 = 0xFF → all HIGH initially
-    xl_w(0x03, 0xFF);  // OUTPUT_PORT_1 = 0xFF → all HIGH (CS/SCLK/MOSI idle high)
-    delay(10);
-    // Proper LCD_RST pulse: HIGH→LOW→HIGH gives ST7701 a real reset.
-    // LCD_RST is XL9535 P0.5, so clear bit 5 in port 0 output.
-    xl_w(0x02, 0xFF & ~(1 << 5));   // LCD_RST low
-    delay(50);
-    xl_w(0x02, 0xFF);               // LCD_RST high (release reset)
-    delay(200);                     // wait for ST7701 internal reset
-    Serial.println("[3b] XL9535 ports OUTPUT, LCD_RST pulsed");
-    Serial.flush();
-
-    // Note: do NOT ledcAttach BUZZER_PIN — Arduino's tone()/noTone() owns
-    // its own LEDC channel internally in core 3.x. Doing both fights.
     pinMode(BUZZER_PIN, OUTPUT);
-    Serial.println("[4] buzzer pin OK");
 
-#if !DCP_NO_DISPLAY
+    attachInterrupt(TOUCH_INT, [] { Touch_Int_Flag = true; }, FALLING);
+
+    Wire.begin(IIC_SDA, IIC_SCL);
+    Serial.println("[2] Wire begin");
+
     gfx->begin();
-    Serial.println("[5] gfx->begin done");
+    gfx->fillScreen(BLACK);
+    Serial.println("[3] gfx->begin done");
 
-    gfx->fillScreen(0xFFFF);
-    gfx->setTextColor(0x0000);
-    gfx->setTextSize(3);
-    gfx->setCursor(10, 200);
-    gfx->print("DCP smart-panel-01");
-    Serial.println("[6] draw done");
+    // Reset touch via the XL9535 expander API
+    gfx->XL_digitalWrite(XL95X5_TOUCH_RST, LOW);
+    delay(200);
+    gfx->XL_digitalWrite(XL95X5_TOUCH_RST, HIGH);
+    delay(200);
 
     touch.init();
-    Serial.println("[7] touch init done");
-#else
-    Serial.println("[5-7] display skipped (DCP_NO_DISPLAY)");
-#endif
+    Serial.println("[4] touch init done");
+
+    lvgl_init_displays();
+    Serial.println("[5] LVGL init done");
+
+    build_ui();
+    Serial.println("[6] UI built");
 
     init_can();
-    Serial.println("[8] can init done");
+    Serial.println("[7] CAN init done");
 
     static dcp::DCP link(Serial, bindings, sizeof(bindings) / sizeof(bindings[0]));
     dcp_link = &link;
-    Serial.println("[9] setup complete");
+    Serial.println("[8] DCP link up — entering loop");
 }
 
 void loop() {
     if (dcp_link) dcp_link->poll();
     pump_can();
     pump_score();
-    pump_touch();
+
+    // LVGL needs to know how much time elapsed since last tick. The bundled
+    // lv_conf.h has LV_TICK_CUSTOM=0, so we feed it manually here. Without
+    // this, lv_timer_handler thinks no time has passed and the refresh
+    // timer never fires → dirty widgets never reach flush_cb → no on-screen
+    // updates after the first paint.
+    static uint32_t last_tick_ms = 0;
+    uint32_t now = millis();
+    lv_tick_inc(now - last_tick_ms);
+    last_tick_ms = now;
+
+    lv_timer_handler();
+    delay(5);
 }
