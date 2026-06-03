@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: autopoc-test-builds
+  labels:
+    app.kubernetes.io/name: dcp
+    app.kubernetes.io/managed-by: autopoc

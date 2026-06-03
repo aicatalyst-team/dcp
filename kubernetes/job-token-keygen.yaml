@@ -1,0 +1,33 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dcp-token-keygen
+  namespace: autopoc-test-builds
+  labels:
+    app: dcp
+    autopoc.io/project: dcp
+    autopoc.io/scenario: token-keygen
+spec:
+  backoffLimit: 1
+  activeDeadlineSeconds: 60
+  template:
+    spec:
+      containers:
+        - name: dcp
+          image: image-registry.openshift-image-registry.svc:5000/autopoc-test-builds/dcp:latest
+          imagePullPolicy: Always
+          command: ["dcp"]
+          args: ["token", "keygen"]
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      restartPolicy: Never
