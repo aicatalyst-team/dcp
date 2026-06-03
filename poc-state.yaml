@@ -2,7 +2,7 @@ project:
   name: dcp
   source_repo_url: https://github.com/device-context-protocol/dcp
   started_at: "2026-06-03T00:00:00Z"
-  current_phase: poc_plan
+  current_phase: containerize
 
 intake:
   status: completed
@@ -110,7 +110,11 @@ poc_plan:
     needs_llm_api: false
     llm_env_pattern: null
 containerize:
-  status: pending
+  status: completed
+  dockerfiles:
+    - component: dcp
+      path: /tmp/autopoc/repos/dcp/Dockerfile.ubi
+      base_image: registry.access.redhat.com/ubi9/python-312
 build:
   status: pending
 deploy:

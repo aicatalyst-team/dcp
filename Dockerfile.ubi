@@ -14,7 +14,8 @@ RUN pip install --no-cache-dir ".[mcp,dev]"
 COPY examples/ examples/
 COPY tests/ tests/
 
-# OpenShift compatibility
+# OpenShift compatibility - switch to root for permission fix
+USER 0
 RUN chgrp -R 0 /opt/app-root && chmod -R g=u /opt/app-root
 
 USER 1001
