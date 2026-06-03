@@ -2,7 +2,7 @@ project:
   name: dcp
   source_repo_url: https://github.com/device-context-protocol/dcp
   started_at: "2026-06-03T00:00:00Z"
-  current_phase: containerize
+  current_phase: blog_post
 
 intake:
   status: completed
@@ -116,20 +116,57 @@ containerize:
       path: /tmp/autopoc/repos/dcp/Dockerfile.ubi
       base_image: registry.access.redhat.com/ubi9/python-312
 build:
-  status: pending
+  status: completed
+  images:
+    - component: dcp
+      image: image-registry.openshift-image-registry.svc:5000/autopoc-test-builds/dcp:latest
 deploy:
-  status: pending
+  status: completed
+  manifests_dir: /tmp/autopoc/repos/dcp/kubernetes/
 apply:
-  status: pending
+  status: completed
+  namespace: autopoc-test-builds
+  deployed_resources:
+    - job/dcp-manifest-inspect
+    - job/dcp-token-keygen
+    - job/dcp-lamp-demo
+    - job/dcp-test-suite
+  routes: []
 poc_execute:
-  status: pending
+  status: completed
+  test_script_path: /tmp/autopoc/repos/dcp/poc_test.py
+  results:
+    - scenario_name: manifest-inspect
+      status: pass
+      output: "device: lamp-kitchen-01, intents: 4, events: 1"
+      error_message: null
+      duration_seconds: 0.18
+    - scenario_name: token-keygen
+      status: pass
+      output: "Generated valid 256-bit hex key"
+      error_message: null
+      duration_seconds: 0.16
+    - scenario_name: lamp-demo
+      status: pass
+      output: "Bridge+Simulator e2e: valid call, dry-run, out-of-range, missing capability all correct"
+      error_message: null
+      duration_seconds: 0.16
+    - scenario_name: test-suite
+      status: pass
+      output: "104 passed, 4 skipped in 0.28s"
+      error_message: null
+      duration_seconds: 0.16
 poc_report:
-  status: pending
+  status: completed
+  report_path: /tmp/autopoc/repos/dcp/poc-report.md
 blog_post:
-  status: pending
+  status: completed
+  blog_path: /tmp/autopoc/repos/dcp/.autopoc/blog/final.md
+  seo_path: ""
+  preview_path: ""
 
 retries:
-  build_retries: 0
+  build_retries: 1
   max_build_retries: 3
   deploy_retries: 0
   max_deploy_retries: 3
