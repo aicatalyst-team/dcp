@@ -1,0 +1,136 @@
+project:
+  name: dcp
+  source_repo_url: https://github.com/device-context-protocol/dcp
+  started_at: "2026-06-03T00:00:00Z"
+  current_phase: poc_plan
+
+intake:
+  status: completed
+  local_clone_path: /tmp/autopoc/repos/dcp
+  repo_digest_path: null
+  repo_summary: >-
+    DCP (Device Context Protocol) is a Python SDK and protocol for bridging LLM agents
+    to IoT/physical devices via compact CBOR wire frames. It includes a reference Python
+    Bridge, MCP server wrapper (dcp serve), generic device simulator, HMAC capability
+    tokens, and transports for UART, MQTT, BLE, and loopback. The PyPI package is named
+    pydcp (import as dcp). 34 GitHub stars, MIT license, v0.3.1.
+  components:
+    - name: dcp
+      language: python
+      build_system: pip
+      entry_point: "dcp.cli:main"
+      port: null
+      source_dir: "."
+      existing_dockerfile: null
+      is_ml_workload: false
+  has_helm_chart: false
+  has_kustomize: false
+  has_compose: false
+  existing_ci_cd: github-actions
+
+evaluate:
+  status: completed
+  total_score: 69
+  max_possible_score: 100
+  relationship: integrates-with-red-hat-ai
+  strategy_areas:
+    - agentic-ai
+  capability_labels:
+    - mcp
+    - tool-calling
+    - agent-runtime
+    - developer-experience
+  rationale: >-
+    DCP maps directly to the Agentic AI strategy area via its MCP bridge server.
+    It demonstrates tool connectivity for LLM agents controlling physical devices,
+    which aligns with Red Hat AI's MCP and agentic AI story.
+  strengths:
+    - MCP bridge pattern directly relevant to Red Hat AI agentic AI strategy
+    - Simulator mode enables hardware-free demonstration
+    - Well-structured codebase with 88 tests
+    - Safety-first design with capability tokens
+  risks:
+    - Niche audience (IoT + LLM intersection)
+    - No GPU or AI model components
+    - MCP server uses stdio transport
+  evaluation_path: /tmp/autopoc/repos/dcp/.autopoc/rhoai-evaluation.md
+fork:
+  status: completed
+  fork_repo_url: https://github.com/aicatalyst-team/dcp
+  fork_target: github
+poc_plan:
+  status: completed
+  poc_type: infrastructure
+  poc_plan_path: /tmp/autopoc/repos/dcp/poc-plan.md
+  poc_components:
+    - dcp
+  scenarios:
+    - name: manifest-inspect
+      description: "Run dcp inspect to parse and display manifest"
+      type: cli
+      endpoint: null
+      input_data: "dcp inspect examples/lamp_manifest.yaml"
+      expected_behavior: "Exit 0, output contains lamp-kitchen-01 and set_brightness"
+      timeout_seconds: 30
+    - name: token-keygen
+      description: "Generate random HMAC secret"
+      type: cli
+      endpoint: null
+      input_data: "dcp token keygen"
+      expected_behavior: "Exit 0, output is 64-char hex string"
+      timeout_seconds: 15
+    - name: lamp-demo
+      description: "Run Bridge + Simulator end-to-end demo"
+      type: cli
+      endpoint: null
+      input_data: "python examples/lamp_demo.py"
+      expected_behavior: "Exit 0, output contains valid call, dry-run, out-of-range"
+      timeout_seconds: 30
+    - name: test-suite
+      description: "Run pytest test suite"
+      type: cli
+      endpoint: null
+      input_data: "pytest tests/ -v"
+      expected_behavior: "Exit 0, all tests pass"
+      timeout_seconds: 120
+  infrastructure:
+    needs_inference_server: false
+    needs_vector_db: false
+    needs_embedding_model: false
+    needs_gpu: false
+    needs_pvc: false
+    sidecar_containers: []
+    extra_env_vars: {}
+    resource_profile: small
+    deployment_model: job
+    listens_on_port: false
+    long_running: false
+    entrypoint_suggestion: "dcp"
+    test_strategy: cli
+    needs_llm_api: false
+    llm_env_pattern: null
+containerize:
+  status: pending
+build:
+  status: pending
+deploy:
+  status: pending
+apply:
+  status: pending
+poc_execute:
+  status: pending
+poc_report:
+  status: pending
+blog_post:
+  status: pending
+
+retries:
+  build_retries: 0
+  max_build_retries: 3
+  deploy_retries: 0
+  max_deploy_retries: 3
+  container_fix_retries: 0
+  max_container_fix_retries: 2
+  experiment_tag_counter: 0
+
+errors: []
