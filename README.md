@@ -1,4 +1,10 @@
-# DCP — Device Context Protocol
+> [!WARNING]
+> **This repository is archived.**
+>
+> Archived on 2026-09-08 by the AI Catalyst Platform Team.
+> It is read-only and no longer maintained.
+
+---# DCP — Device Context Protocol
 
 [![tests](https://github.com/device-context-protocol/dcp/actions/workflows/test.yml/badge.svg)](https://github.com/device-context-protocol/dcp/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
